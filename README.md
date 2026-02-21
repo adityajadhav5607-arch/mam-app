@@ -1,34 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Chatbot Starter (Supabase + OpenRouter)
 
-## Getting Started
+Minimal chat app with:
+- Supabase auth (email/password)
+- Supabase database for chat history
+- OpenRouter API for responses
+- Next.js App Router
 
-First, run the development server:
+## 1) Environment variables
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Create `.env.local` (already stubbed) and fill:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+OPENROUTER_API_KEY=
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 2) Supabase setup
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Create a new Supabase project.
+2. Go to **Authentication ? Providers** and enable **Email**.
+3. Create the `messages` table and policies using the SQL below.
 
-## Learn More
+### SQL
 
-To learn more about Next.js, take a look at the following resources:
+```
+create table if not exists public.messages (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null check (role in ('user', 'assistant')),
+  content text not null,
+  created_at timestamptz not null default now()
+);
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+alter table public.messages enable row level security;
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+create policy "Users can read their own messages"
+  on public.messages
+  for select
+  using (auth.uid() = user_id);
 
-## Deploy on Vercel
+create policy "Users can insert their own messages"
+  on public.messages
+  for insert
+  with check (auth.uid() = user_id);
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 3) Run the app
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+## Notes
+
+- If email confirmation is enabled in Supabase, you will need to confirm the email before sign-in works.
+- The OpenRouter model is set to `openrouter/auto` for convenience. You can change it in `src/app/api/chat/route.ts`.
