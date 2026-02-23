@@ -5,6 +5,61 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 
+const replyTool = {
+  type: "function",
+  function: {
+    name: "final_response",
+    description: "Return the assistant reply for the user.",
+    parameters: {
+      type: "object",
+      properties: {
+        reply: {
+          type: "string",
+          description: "The final assistant response to display to the user.",
+        },
+      },
+      required: ["reply"],
+      additionalProperties: false,
+    },
+  },
+} as const;
+
+type OpenRouterToolCall = {
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+};
+
+type OpenRouterResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+      tool_calls?: OpenRouterToolCall[];
+    };
+  }>;
+};
+
+function parseReplyFromToolCall(payload: OpenRouterResponse): string | null {
+  const firstToolCall = payload.choices?.[0]?.message?.tool_calls?.[0];
+  const name = firstToolCall?.function?.name;
+  const argsText = firstToolCall?.function?.arguments;
+
+  if (name !== "final_response" || !argsText) {
+    return null;
+  }
+
+  try {
+    const args = JSON.parse(argsText) as { reply?: unknown };
+    if (typeof args.reply === "string" && args.reply.trim()) {
+      return args.reply.trim();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: Request) {
   if (!supabaseUrl || !supabaseAnonKey) {
     return NextResponse.json(
@@ -78,23 +133,32 @@ export async function POST(req: Request) {
     );
   }
 
-  const aiResponse = await fetch(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${openRouterKey}`,
-        "X-Title": "mamedov-internship-app",
+  const aiResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${openRouterKey}`,
+      "X-Title": "mamedov-internship-app",
+    },
+    body: JSON.stringify({
+      model: "openrouter/auto",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Always call the final_response tool exactly once to answer the user.",
+        },
+        ...(history ?? []),
+      ],
+      tools: [replyTool],
+      tool_choice: {
+        type: "function",
+        function: { name: "final_response" },
       },
-      body: JSON.stringify({
-        model: "openrouter/auto",
-        messages: history ?? [],
-      }),
-    }
-  );
+    }),
+  });
 
-  const aiJson = await aiResponse.json();
+  const aiJson = (await aiResponse.json()) as OpenRouterResponse;
   if (!aiResponse.ok) {
     return NextResponse.json(
       {
@@ -105,23 +169,24 @@ export async function POST(req: Request) {
     );
   }
 
-  const reply = aiJson?.choices?.[0]?.message?.content?.trim();
+  const reply = parseReplyFromToolCall(aiJson);
   if (!reply) {
     return NextResponse.json(
-      { error: "No reply returned by OpenRouter." },
+      {
+        error: "Model did not return a valid tool call reply.",
+        details: aiJson,
+      },
       { status: 500 }
     );
   }
 
-  const { error: insertAssistantError } = await supabase
-    .from("messages")
-    .insert([
-      {
-        user_id: user.id,
-        role: "assistant",
-        content: reply,
-      },
-    ]);
+  const { error: insertAssistantError } = await supabase.from("messages").insert([
+    {
+      user_id: user.id,
+      role: "assistant",
+      content: reply,
+    },
+  ]);
 
   if (insertAssistantError) {
     return NextResponse.json(
@@ -130,5 +195,5 @@ export async function POST(req: Request) {
     );
   }
 
-  return NextResponse.json({ reply });
+  return NextResponse.json({ reply, tool_schema: replyTool });
 }
